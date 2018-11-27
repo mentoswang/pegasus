@@ -1211,8 +1211,8 @@ void pegasus_client_impl::async_get_unordered_scanners(
     }
 
     // check params
-    if (max_split_count <= 0) {
-        derror("invalid max_split_count: which should be greater than 0, but %d", max_split_count);
+    if (max_split_count < 0) {
+        derror("invalid max_split_count: which should be not less than 0, but %d", max_split_count);
         callback(PERR_INVALID_SPLIT_COUNT, std::vector<pegasus_scanner *>());
         return;
     }
@@ -1226,7 +1226,10 @@ void pegasus_client_impl::async_get_unordered_scanners(
             ::dsn::unmarshall(resp, response);
             if (response.err == ERR_OK) {
                 unsigned int count = response.partition_count;
-                int split = count < max_split_count ? count : max_split_count;
+                // scanner count will equal partition number when max_split_count = 0
+                int split = max_split_count == 0
+                                ? count
+                                : (count < max_split_count ? count : max_split_count);
                 scanners.resize(split);
 
                 int size = count / split;
@@ -1273,12 +1276,202 @@ int pegasus_client_impl::get_unordered_scanners(int max_split_count,
     return ret;
 }
 
+void pegasus_client_impl::async_get_unordered_hashrange_scanners(
+    int max_split_count,
+    const std::string &start_hashkey,
+    const std::string &stop_hashkey,
+    const scan_options &options,
+    async_get_unordered_scanners_callback_t &&callback)
+{
+    ::dsn::blob start;
+    ::dsn::blob stop;
+    scan_options o(options);
+
+    if (!callback) {
+        return;
+    }
+
+    // check params
+    if (max_split_count < 0) {
+        derror("invalid max_split_count: which should be not less than 0, but %d", max_split_count);
+        callback(PERR_INVALID_SPLIT_COUNT, std::vector<pegasus_scanner *>());
+        return;
+    }
+
+    // build start key
+    if (!start_hashkey.empty()) {
+        pegasus_generate_key(start, start_hashkey, std::string(""));
+        if (!o.start_inclusive) {
+            // make the start key 1 bit greater than the input start_hashkey and then include it,
+            // to get all sortkeys under hashkey greater than start_hashkey
+            int changed_bytes = key_successor(const_cast<char *>(start.data()), start.length());
+            dassert(changed_bytes > 0, "success hash key failed.");
+            o.start_inclusive = true;
+        }
+    } else {
+        // make the start key to min key
+        start = pegasus_client_impl::pegasus_scanner_impl::_min;
+        // o.start_inclusive = false;
+    }
+    // build stop key
+    if (!stop_hashkey.empty()) {
+        pegasus_generate_key(stop, stop_hashkey, std::string(""));
+        if (o.stop_inclusive) {
+            // make the stop key 1 bit greater than the input stop_hashkey and then exclude it,
+            // to get all sortkeys under stop_hashkey
+            int changed_bytes = key_successor(const_cast<char *>(stop.data()), stop.length());
+            dassert(changed_bytes > 0, "success hash key failed.");
+            o.stop_inclusive = false;
+        }
+    } else {
+        // make the stop key to max key
+        stop = pegasus_client_impl::pegasus_scanner_impl::_max;
+        // o.stop_inclusive = false;
+    }
+
+    // check empty range
+    int c = ::dsn::string_view(start).compare(stop);
+    if (c >= 0) {
+        callback(PERR_OK, std::vector<pegasus_scanner *>());
+        return;
+    }
+
+    auto new_callback =
+        [ user_callback = std::move(callback), max_split_count, o, start, stop, this ](
+            ::dsn::error_code err, dsn::message_ex * req, dsn::message_ex * resp)
+    {
+        std::vector<pegasus_scanner *> scanners;
+        configuration_query_by_index_response response;
+        if (err == ERR_OK) {
+            ::dsn::unmarshall(resp, response);
+            if (response.err == ERR_OK) {
+                unsigned int count = response.partition_count;
+                // scanner count will equal partition number when max_split_count = 0
+                int split = max_split_count == 0
+                                ? count
+                                : (count < max_split_count ? count : max_split_count);
+                scanners.resize(split);
+
+                int size = count / split;
+                int more = count - size * split;
+
+                for (int i = 0; i < split; i++) {
+                    int s = size + (i < more);
+                    std::vector<uint64_t> hash(s);
+                    for (int j = 0; j < s; j++)
+                        hash[j] = --count;
+                    scanners[i] =
+                        new pegasus_scanner_impl(_client, std::move(hash), o, start, stop);
+                }
+            }
+        }
+        int ret = get_client_error(err == ERR_OK ? int(response.err) : int(err));
+        user_callback(ret, std::move(scanners));
+    };
+
+    configuration_query_by_index_request req;
+    req.app_name = _app_name;
+    ::dsn::rpc::call(_meta_server,
+                     RPC_CM_QUERY_PARTITION_CONFIG_BY_INDEX,
+                     req,
+                     nullptr,
+                     new_callback,
+                     std::chrono::milliseconds(options.timeout_ms),
+                     0,
+                     0);
+}
+
+int pegasus_client_impl::get_unordered_hashrange_scanners(int max_split_count,
+                                                          const std::string &start_hashkey,
+                                                          const std::string &stop_hashkey,
+                                                          const scan_options &options,
+                                                          std::vector<pegasus_scanner *> &scanners)
+{
+    ::dsn::utils::notify_event op_completed;
+    int ret = -1;
+    auto callback = [&](int err, std::vector<pegasus_scanner *> &&ss) {
+        ret = err;
+        scanners = std::move(ss);
+        op_completed.notify();
+    };
+    async_get_unordered_hashrange_scanners(
+        max_split_count, start_hashkey, stop_hashkey, options, std::move(callback));
+    op_completed.wait();
+    return ret;
+}
+
+void pegasus_client_impl::async_get_sorted_scanner(const std::string &start_hashkey,
+                                                   const std::string &stop_hashkey,
+                                                   const std::string &start_sortkey,
+                                                   const std::string &stop_sortkey,
+                                                   const scan_options &options,
+                                                   async_get_sorted_scanner_callback_t &&callback)
+{
+    // TODO: Pn
+    derror("no implement yet");
+}
+
+int pegasus_client_impl::get_sorted_scanner(const std::string &start_hashkey,
+                                            const std::string &stop_hashkey,
+                                            const std::string &start_sortkey,
+                                            const std::string &stop_sortkey,
+                                            const scan_options &options,
+                                            pegasus_sorted_scanner *&scanner)
+{
+    // TODO: P1
+    ::dsn::utils::notify_event op_completed;
+    int ret = -1;
+    // scanner count will equal partition number when max_split_count = 0
+    int max_split_count = 0;
+    std::vector<pegasus_scanner *> scanners;
+    auto callback = [&](int err, std::vector<pegasus_scanner *> &&ss) {
+        ret = err;
+        scanner = new pegasus_sorted_scanner_impl(std::move(ss));
+        op_completed.notify();
+    };
+    if (start_hashkey.empty() && stop_hashkey.empty() && start_sortkey.empty() &&
+        stop_sortkey.empty()) // full scan
+        async_get_unordered_scanners(max_split_count, options, std::move(callback));
+    else if (!start_hashkey.empty() || !stop_hashkey.empty()) {
+        if (start_sortkey.empty() &&
+            stop_sortkey.empty()) { // hash-range: single range in each replica
+            async_get_unordered_hashrange_scanners(
+                max_split_count, start_hashkey, stop_hashkey, options, std::move(callback));
+        } else { // hash-range + sort-range: multiple range in each replica
+            // TODO: P3
+        }
+    } else { // sort-range: multiple range in each replica
+        // TODO: P4
+    }
+    op_completed.wait();
+    return ret;
+}
+
 const char *pegasus_client_impl::get_error_string(int error_code) const
 {
     auto it = _client_error_to_string.find(error_code);
     dassert(
         it != _client_error_to_string.end(), "client error %d have no error string", error_code);
     return it->second.c_str();
+}
+
+/*
+  @return Number of bytes that were changed
+*/
+int pegasus_client_impl::key_successor(char *key, const unsigned int &len)
+{
+    dassert(key != nullptr, "no input key to success.");
+    int changed = 0;
+    char *p = key + len - 1;
+    for (; p >= key; p--) {
+        changed++;
+        if (*p != (unsigned char)(0xFF)) {
+            *p = *p + 1;
+            break;
+        }
+        *p = '\0';
+    }
+    return changed;
 }
 
 /*static*/ void pegasus_client_impl::init_error()

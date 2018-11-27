@@ -261,6 +261,8 @@ public:
 
     class pegasus_scanner;
 
+    class pegasus_sorted_scanner;
+
     // define callback function types for asynchronous operations.
     typedef std::function<void(int /*error_code*/, internal_info && /*info*/)> async_set_callback_t;
     typedef std::function<void(int /*error_code*/, internal_info && /*info*/)>
@@ -298,6 +300,8 @@ public:
         async_get_scanner_callback_t;
     typedef std::function<void(int /*error_code*/, std::vector<pegasus_scanner *> && /*scanners*/)>
         async_get_unordered_scanners_callback_t;
+    typedef std::function<void(int /*error_code*/, pegasus_sorted_scanner * /*sorted_scanner*/)>
+        async_get_sorted_scanner_callback_t;
 
     class abstract_pegasus_scanner
     {
@@ -357,6 +361,19 @@ public:
         /// and the original scanner pointer should not be used anymore
         ///
         virtual pegasus_scanner_wrapper get_smart_wrapper() = 0;
+    };
+
+    typedef std::shared_ptr<abstract_pegasus_scanner> pegasus_sorted_scanner_wrapper;
+
+    class pegasus_sorted_scanner : public abstract_pegasus_scanner
+    {
+        ///
+        /// \brief get a smart wrapper of scanner which could be used like shared_ptr
+        /// then users do not need bother of the scanner object destruction
+        /// this method should be called after scanner pointer generated immediately,
+        /// and the original scanner pointer should not be used anymore
+        ///
+        virtual pegasus_sorted_scanner_wrapper get_smart_wrapper() = 0;
     };
 
 public:
@@ -1136,6 +1153,69 @@ public:
     async_get_unordered_scanners(int max_split_count,
                                  const scan_options &options,
                                  async_get_unordered_scanners_callback_t &&callback) = 0;
+
+    virtual int get_unordered_hashrange_scanners(int max_split_count,
+                                                 const std::string &start_hashkey,
+                                                 const std::string &stop_hashkey,
+                                                 const scan_options &options,
+                                                 std::vector<pegasus_scanner *> &scanners) = 0;
+    virtual void
+    async_get_unordered_hashrange_scanners(int max_split_count,
+                                           const std::string &start_hashkey,
+                                           const std::string &stop_hashkey,
+                                           const scan_options &options,
+                                           async_get_unordered_scanners_callback_t &&callback) = 0;
+
+    ///
+    /// \brief get a scanner for sorted [start_hashkey, stop_hashkey][start_sortkey, stop_sortkey]
+    /// \param start_hashkey
+    /// hashkey to start with
+    /// \param stop_hashkey
+    /// hashkey to stop. ""(empty string) represents the max key
+    /// \param start_sortkey
+    /// sortkey to start with
+    /// \param stop_sortkey
+    /// sortkey to stop. ""(empty string) represents the max key
+    /// \param options
+    /// which used to indicate scan options, like which bound is inclusive
+    /// \param scanner
+    /// out param, used to get k-v
+    /// this pointer should be deleted when scan complete
+    /// \return
+    /// int, the error indicates whether or not the operation is succeeded.
+    /// this error can be converted to a string using get_error_string()
+    ///
+    virtual int
+    get_sorted_scanner(const std::string &start_hashkey, // start from beginning if this set ""
+                       const std::string &stop_hashkey,  // to the last item if this set ""
+                       const std::string &start_sortkey, // start from beginning if this set ""
+                       const std::string &stop_sortkey,  // to the last item if this set ""
+                       const scan_options &options,
+                       pegasus_sorted_scanner *&scanner) = 0;
+
+    ///
+    /// \brief async get a scanner for sorted [start_hashkey, stop_hashkey][start_sortkey,
+    /// stop_sortkey]
+    /// \param start_hashkey
+    /// hashkey to start with
+    /// \param stop_hashkey
+    /// hashkey to stop. ""(empty string) represents the max key
+    /// \param start_sortkey
+    /// sortkey to start with
+    /// \param stop_sortkey
+    /// sortkey to stop. ""(empty string) represents the max key
+    /// \param options
+    /// which used to indicate scan options, like which bound is inclusive
+    /// \param callback
+    /// return status and scanner in callback, and the latter should be deleted when scan complete
+    ///
+    virtual void async_get_sorted_scanner(
+        const std::string &start_hashkey, // start from beginning if this set ""
+        const std::string &stop_hashkey,  // to the last item if this set ""
+        const std::string &start_sortkey, // start from beginning if this set ""
+        const std::string &stop_sortkey,  // to the last item if this set ""
+        const scan_options &options,
+        async_get_sorted_scanner_callback_t &&callback) = 0;
 
     ///
     /// \brief get_error_string

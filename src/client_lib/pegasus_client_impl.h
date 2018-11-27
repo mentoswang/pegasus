@@ -221,7 +221,36 @@ public:
                                  const scan_options &options,
                                  async_get_unordered_scanners_callback_t &&callback) override;
 
+    virtual int get_unordered_hashrange_scanners(int max_split_count,
+                                                 const std::string &start_hashkey,
+                                                 const std::string &stop_hashkey,
+                                                 const scan_options &options,
+                                                 std::vector<pegasus_scanner *> &scanners) override;
+
+    virtual void async_get_unordered_hashrange_scanners(
+        int max_split_count,
+        const std::string &start_hashkey,
+        const std::string &stop_hashkey,
+        const scan_options &options,
+        async_get_unordered_scanners_callback_t &&callback) override;
+
+    virtual int get_sorted_scanner(const std::string &start_hashkey,
+                                   const std::string &stop_hashkey,
+                                   const std::string &start_sortkey,
+                                   const std::string &stop_sortkey,
+                                   const scan_options &options,
+                                   pegasus_sorted_scanner *&scanner) override;
+
+    virtual void async_get_sorted_scanner(const std::string &start_hashkey,
+                                          const std::string &stop_hashkey,
+                                          const std::string &start_sortkey,
+                                          const std::string &stop_sortkey,
+                                          const scan_options &options,
+                                          async_get_sorted_scanner_callback_t &&callback) override;
+
     virtual const char *get_error_string(int error_code) const override;
+
+    int key_successor(char *key, const unsigned int &len);
 
     static void init_error();
 
@@ -275,8 +304,56 @@ public:
 
     private:
         static const char _holder[];
+
+    public:
         static const ::dsn::blob _min;
         static const ::dsn::blob _max;
+    };
+
+    class pegasus_sorted_scanner_impl : public pegasus_sorted_scanner
+    {
+    public:
+        int next(std::string &hashkey,
+                 std::string &sortkey,
+                 std::string &value,
+                 internal_info *info = nullptr) override;
+
+        void async_next(async_scan_next_callback_t &&) override;
+
+        pegasus_sorted_scanner_wrapper get_smart_wrapper() override;
+
+        ~pegasus_sorted_scanner_impl() override;
+
+        pegasus_sorted_scanner_impl(std::vector<pegasus_scanner *> &&scanners);
+
+        //        pegasus_sorted_scanner_impl(::dsn::apps::rrdb_client *client,
+        //                                    // std::vector<uint64_t> &&hash,
+        //                                    std::vector<pegasus_scanner *> &&scanners,
+        //                                    const scan_options &options);
+        //        pegasus_sorted_scanner_impl(::dsn::apps::rrdb_client *client,
+        //                                    // std::vector<uint64_t> &&hash,
+        //                                    std::vector<pegasus_scanner *> &&scanners,
+        //                                    const scan_options &options,
+        //                                    const ::dsn::blob &start_key,
+        //                                    const ::dsn::blob &stop_key);
+
+    private:
+        //        ::dsn::apps::rrdb_client *_client;
+        ::dsn::blob _start_key;
+        ::dsn::blob _stop_key;
+        //        scan_options _options;
+        std::vector<pegasus_scanner *> _replica_scanners;
+
+        struct replica_scan_item
+        {
+            std::string hashkey;
+            std::string sortkey;
+            std::string value;
+            pegasus_scanner *scanner;
+        } _replica_scan_item;
+        // We won't have same hashkey from different replica scanners, so we don't need multimap to
+        // store them.
+        std::map<std::string, replica_scan_item> _replica_scanner_queue;
     };
 
 private:
@@ -286,6 +363,24 @@ private:
 
     public:
         pegasus_scanner_impl_wrapper(pegasus_scanner *p) : _p(p) {}
+
+        void async_next(async_scan_next_callback_t &&callback) override;
+
+        int next(std::string &hashkey,
+                 std::string &sortkey,
+                 std::string &value,
+                 internal_info *info) override
+        {
+            return _p->next(hashkey, sortkey, value, info);
+        }
+    };
+
+    class pegasus_sorted_scanner_impl_wrapper : public abstract_pegasus_scanner
+    {
+        std::shared_ptr<pegasus_sorted_scanner> _p;
+
+    public:
+        pegasus_sorted_scanner_impl_wrapper(pegasus_sorted_scanner *p) : _p(p) {}
 
         void async_next(async_scan_next_callback_t &&callback) override;
 
