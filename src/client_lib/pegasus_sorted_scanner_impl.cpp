@@ -15,7 +15,7 @@ pegasus_client_impl::pegasus_sorted_scanner_impl::pegasus_sorted_scanner_impl(
     std::vector<pegasus_scanner *> &&scanners)
     : _replica_scanners(std::move(scanners))
 {
-    // TODO: P1
+    // TODO wss P1
 }
 
 int pegasus_client_impl::pegasus_sorted_scanner_impl::next(std::string &hashkey,
@@ -23,7 +23,7 @@ int pegasus_client_impl::pegasus_sorted_scanner_impl::next(std::string &hashkey,
                                                            std::string &value,
                                                            internal_info *info)
 {
-    // TODO: P1
+    // TODO wss P1
     int ret = -1;
     std::string scan_hashkey;
     std::string scan_sortkey;
@@ -98,7 +98,7 @@ int pegasus_client_impl::pegasus_sorted_scanner_impl::next(std::string &hashkey,
 void pegasus_client_impl::pegasus_sorted_scanner_impl::async_next(
     async_scan_next_callback_t &&callback)
 {
-    // TODO: Pn
+    // TODO wss Pn
     derror("no implement yet");
 }
 
@@ -110,9 +110,8 @@ pegasus_client_impl::pegasus_sorted_scanner_impl::get_smart_wrapper()
 
 pegasus_client_impl::pegasus_sorted_scanner_impl::~pegasus_sorted_scanner_impl()
 {
-    // TODO: P2
+    // TODO wss P2
     dassert(_replica_scanner_queue.empty(), "queue should be empty");
-
     for (auto scanner : _replica_scanners) {
         delete scanner;
     }
@@ -121,7 +120,7 @@ pegasus_client_impl::pegasus_sorted_scanner_impl::~pegasus_sorted_scanner_impl()
 void pegasus_client_impl::pegasus_sorted_scanner_impl_wrapper::async_next(
     async_scan_next_callback_t &&callback)
 {
-    // TODO: Pn+1
+    // TODO wss Pn+1
     derror("no implement yet");
 }
 }

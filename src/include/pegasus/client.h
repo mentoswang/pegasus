@@ -1166,6 +1166,23 @@ public:
                                            const scan_options &options,
                                            async_get_unordered_scanners_callback_t &&callback) = 0;
 
+    virtual int get_unordered_multirange_scanners(int max_split_count,
+                                                  const std::string &start_hashkey,
+                                                  const std::string &stop_hashkey,
+                                                  const std::string &start_sortkey,
+                                                  const std::string &stop_sortkey,
+                                                  const scan_options &options,
+                                                  std::vector<pegasus_scanner *> &scanners) = 0;
+
+    virtual void
+    async_get_unordered_multirange_scanners(int max_split_count,
+                                            const std::string &start_hashkey,
+                                            const std::string &stop_hashkey,
+                                            const std::string &start_sortkey,
+                                            const std::string &stop_sortkey,
+                                            const scan_options &options,
+                                            async_get_unordered_scanners_callback_t &&callback) = 0;
+
     ///
     /// \brief get a scanner for sorted [start_hashkey, stop_hashkey][start_sortkey, stop_sortkey]
     /// \param start_hashkey

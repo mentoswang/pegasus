@@ -3673,6 +3673,8 @@ void get_scanner_request::__set_sort_key_filter_pattern(const ::dsn::blob &val)
     this->sort_key_filter_pattern = val;
 }
 
+void get_scanner_request::__set_hash_sort_range(const bool val) { this->hash_sort_range = val; }
+
 uint32_t get_scanner_request::read(::apache::thrift::protocol::TProtocol *iprot)
 {
 
@@ -3776,6 +3778,14 @@ uint32_t get_scanner_request::read(::apache::thrift::protocol::TProtocol *iprot)
                 xfer += iprot->skip(ftype);
             }
             break;
+        case 11:
+            if (ftype == ::apache::thrift::protocol::T_BOOL) {
+                xfer += iprot->readBool(this->hash_sort_range);
+                this->__isset.hash_sort_range = true;
+            } else {
+                xfer += iprot->skip(ftype);
+            }
+            break;
         default:
             xfer += iprot->skip(ftype);
             break;
@@ -3836,6 +3846,10 @@ uint32_t get_scanner_request::write(::apache::thrift::protocol::TProtocol *oprot
     xfer += this->sort_key_filter_pattern.write(oprot);
     xfer += oprot->writeFieldEnd();
 
+    xfer += oprot->writeFieldBegin("hash_sort_range", ::apache::thrift::protocol::T_BOOL, 11);
+    xfer += oprot->writeBool(this->hash_sort_range);
+    xfer += oprot->writeFieldEnd();
+
     xfer += oprot->writeFieldStop();
     xfer += oprot->writeStructEnd();
     return xfer;
@@ -3854,6 +3868,7 @@ void swap(get_scanner_request &a, get_scanner_request &b)
     swap(a.hash_key_filter_pattern, b.hash_key_filter_pattern);
     swap(a.sort_key_filter_type, b.sort_key_filter_type);
     swap(a.sort_key_filter_pattern, b.sort_key_filter_pattern);
+    swap(a.hash_sort_range, b.hash_sort_range);
     swap(a.__isset, b.__isset);
 }
 
@@ -3869,6 +3884,7 @@ get_scanner_request::get_scanner_request(const get_scanner_request &other108)
     hash_key_filter_pattern = other108.hash_key_filter_pattern;
     sort_key_filter_type = other108.sort_key_filter_type;
     sort_key_filter_pattern = other108.sort_key_filter_pattern;
+    hash_sort_range = other108.hash_sort_range;
     __isset = other108.__isset;
 }
 get_scanner_request::get_scanner_request(get_scanner_request &&other109)
@@ -3883,6 +3899,7 @@ get_scanner_request::get_scanner_request(get_scanner_request &&other109)
     hash_key_filter_pattern = std::move(other109.hash_key_filter_pattern);
     sort_key_filter_type = std::move(other109.sort_key_filter_type);
     sort_key_filter_pattern = std::move(other109.sort_key_filter_pattern);
+    hash_sort_range = std::move(other109.hash_sort_range);
     __isset = std::move(other109.__isset);
 }
 get_scanner_request &get_scanner_request::operator=(const get_scanner_request &other110)
@@ -3897,6 +3914,7 @@ get_scanner_request &get_scanner_request::operator=(const get_scanner_request &o
     hash_key_filter_pattern = other110.hash_key_filter_pattern;
     sort_key_filter_type = other110.sort_key_filter_type;
     sort_key_filter_pattern = other110.sort_key_filter_pattern;
+    hash_sort_range = other110.hash_sort_range;
     __isset = other110.__isset;
     return *this;
 }
@@ -3912,6 +3930,7 @@ get_scanner_request &get_scanner_request::operator=(get_scanner_request &&other1
     hash_key_filter_pattern = std::move(other111.hash_key_filter_pattern);
     sort_key_filter_type = std::move(other111.sort_key_filter_type);
     sort_key_filter_pattern = std::move(other111.sort_key_filter_pattern);
+    hash_sort_range = std::move(other111.hash_sort_range);
     __isset = std::move(other111.__isset);
     return *this;
 }
@@ -3938,6 +3957,8 @@ void get_scanner_request::printTo(std::ostream &out) const
         << "sort_key_filter_type=" << to_string(sort_key_filter_type);
     out << ", "
         << "sort_key_filter_pattern=" << to_string(sort_key_filter_pattern);
+    out << ", "
+        << "hash_sort_range=" << to_string(hash_sort_range);
     out << ")";
 }
 

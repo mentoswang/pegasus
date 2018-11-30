@@ -1162,6 +1162,19 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
         }
     }
 
+    // TODO wss P4: need to think about compatibility with hash_key_filter_type, etc
+    ::dsn::blob start_hashkey, start_sortkey, stop_hashkey, stop_sortkey, range_start_key,
+        range_stop_key, temp_hashkey, temp_sortkey;
+    rocksdb::Slice range_stop, range_start;
+    if (request.hash_sort_range) {
+        pegasus_restore_key(request.start_key, start_hashkey, start_sortkey);
+        pegasus_restore_key(request.stop_key, stop_hashkey, stop_sortkey);
+        pegasus_generate_key(range_start_key, start_hashkey, start_sortkey);
+        pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+        range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
+        range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+    }
+
     // check if range is empty
     int c = start.compare(stop);
     if (c > 0 || (c == 0 && (!start_inclusive || !stop_inclusive))) {
@@ -1181,6 +1194,27 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
         reply(resp);
         return;
     }
+    // check if sub range is empty
+    if (request.hash_sort_range) {
+        c = range_start.compare(range_stop);
+        if (c > 0 || (c == 0 && (!start_inclusive || !stop_inclusive))) {
+            // empty key range
+            if (_verbose_log) {
+                dwarn("%s: empty key range for get_scanner from %s: "
+                      "start_key = \"%s\" (%s), stop_key = \"%s\" (%s)",
+                      replica_name(),
+                      reply.to_address().to_string(),
+                      ::pegasus::utils::c_escape_string(range_start).c_str(),
+                      request.start_inclusive ? "inclusive" : "exclusive",
+                      ::pegasus::utils::c_escape_string(range_stop).c_str(),
+                      request.stop_inclusive ? "inclusive" : "exclusive");
+            }
+            resp.error = rocksdb::Status::kOk;
+            _pfc_multi_get_latency->set(dsn_now_ns() - start_time);
+            reply(resp);
+            return;
+        }
+    }
 
     std::unique_ptr<rocksdb::Iterator> it(_db->NewIterator(_rd_opts));
     it->Seek(start);
@@ -1192,11 +1226,65 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
     int32_t count = 0;
     resp.kvs.reserve(request.batch_size);
     while (count < request.batch_size && it->Valid()) {
-        int c = it->key().compare(stop);
+        int c = request.hash_sort_range ? it->key().compare(range_stop) : it->key().compare(stop);
         if (c > 0 || (c == 0 && !stop_inclusive)) {
             // out of range
-            complete = true;
-            break;
+            ddebug("wss: hit range_stop [%s] without key [%s]",
+                   request.hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                           : ::pegasus::utils::c_escape_string(stop).c_str(),
+                   ::pegasus::utils::c_escape_string(it->key()).c_str());
+
+            // seek new start key for next range
+            if (request.hash_sort_range) {
+                // generate key = next_hashkey + start_sortkey
+                pegasus_restore_key(
+                    range_start_key,
+                    start_hashkey,
+                    temp_sortkey); // temp_sortkey is unused, can we input start_sortkey here?
+                pegasus_restore_key(::dsn::blob(it->key().data(), 0, it->key().length()),
+                                    temp_hashkey,
+                                    temp_sortkey); // temp_sortkey is unused
+                if (c == 0 ||
+                    (temp_hashkey.length() == start_hashkey.length() &&
+                     memcmp(temp_hashkey.data(), start_hashkey.data(), temp_hashkey.length()) ==
+                         0)) {
+                    pegasus_generate_next_blob_by_hashkey(
+                        range_start_key, start_hashkey, start_sortkey);
+                    pegasus_generate_next_blob_by_hashkey(
+                        range_stop_key, start_hashkey, stop_sortkey);
+                } else {
+                    pegasus_generate_key(range_start_key, temp_hashkey, start_sortkey);
+                    pegasus_generate_key(range_stop_key, temp_hashkey, stop_sortkey);
+                }
+                range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
+                if (range_start.compare(stop) > 0) {
+                    ddebug("wss: new range_start [%s] over final stop [%s], finished last range, "
+                           "no more "
+                           "ranges",
+                           ::pegasus::utils::c_escape_string(range_start).c_str(),
+                           ::pegasus::utils::c_escape_string(stop).c_str());
+                    complete = true;
+                    break;
+                }
+                range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+                it->Seek(range_start);
+                if (!it->Valid()) {
+                    ddebug("wss: no more ranges");
+                    complete = true;
+                    break;
+                } else if (it->key().compare(stop) >= 0 || it->key().compare(range_stop) >= 0) {
+                    ddebug("wss: go over range [%s, %s]",
+                           ::pegasus::utils::c_escape_string(range_start).c_str(),
+                           ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    continue;
+                }
+                ddebug("wss: go to next range [%s, %s]",
+                       ::pegasus::utils::c_escape_string(range_start).c_str(),
+                       ::pegasus::utils::c_escape_string(range_stop).c_str());
+            } else {
+                complete = true;
+                break;
+            }
         }
 
         if (first_exclusive) {
@@ -1227,6 +1315,43 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
 
         if (c == 0) {
             // seek to the last position
+            ddebug("wss: hit range_stop [%s] with key [%s]",
+                   request.hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                           : ::pegasus::utils::c_escape_string(stop).c_str(),
+                   ::pegasus::utils::c_escape_string(it->key()).c_str());
+
+            // seek new start key for next range
+            if (request.hash_sort_range) {
+                // generate key = next_hashkey + start_sortkey
+                pegasus_restore_key(
+                    range_start_key,
+                    start_hashkey,
+                    temp_sortkey); // temp_sortkey is unused, can we input start_sortkey here?
+                pegasus_generate_next_blob_by_hashkey(
+                    range_start_key, start_hashkey, start_sortkey);
+                pegasus_generate_next_blob_by_hashkey(range_stop_key, start_hashkey, stop_sortkey);
+                range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
+                if (range_start.compare(stop) > 0) {
+                    ddebug("wss: hit final stop [%s] with key [%s], finished last range, no more "
+                           "ranges",
+                           ::pegasus::utils::c_escape_string(stop).c_str(),
+                           ::pegasus::utils::c_escape_string(it->key()).c_str());
+                    complete = true;
+                    break;
+                }
+                range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+                it->Seek(range_start);
+                if (!it->Valid()) {
+                    ddebug("wss: no more ranges");
+                    complete = true;
+                    break;
+                }
+                ddebug("wss: go to next range [%s, %s]",
+                       ::pegasus::utils::c_escape_string(range_start).c_str(),
+                       ::pegasus::utils::c_escape_string(range_stop).c_str());
+                continue;
+            }
+
             complete = true;
             break;
         }
@@ -1243,9 +1368,11 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
                    "batch_size = %d, read_count = %d, error = %s",
                    replica_name(),
                    reply.to_address().to_string(),
-                   ::pegasus::utils::c_escape_string(start).c_str(),
+                   request.hash_sort_range ? ::pegasus::utils::c_escape_string(range_start).c_str()
+                                           : ::pegasus::utils::c_escape_string(start).c_str(),
                    request.start_inclusive ? "inclusive" : "exclusive",
-                   ::pegasus::utils::c_escape_string(stop).c_str(),
+                   request.hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                           : ::pegasus::utils::c_escape_string(stop).c_str(),
                    request.stop_inclusive ? "inclusive" : "exclusive",
                    request.batch_size,
                    count,
@@ -1261,6 +1388,7 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
         // scan not completed
         std::unique_ptr<pegasus_scan_context> context(
             new pegasus_scan_context(std::move(it),
+                                     std::string(range_start.data(), range_start.size()),
                                      std::string(stop.data(), stop.size()),
                                      request.stop_inclusive,
                                      request.hash_key_filter_type,
@@ -1270,7 +1398,8 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
                                      std::string(request.sort_key_filter_pattern.data(),
                                                  request.sort_key_filter_pattern.length()),
                                      request.batch_size,
-                                     request.no_value));
+                                     request.no_value,
+                                     request.hash_sort_range));
         int64_t handle = _context_cache.put(std::move(context));
         resp.context_id = handle;
         // if the context is used, it will be fetched and re-put into cache,
@@ -1313,6 +1442,7 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
     if (context) {
         rocksdb::Iterator *it = context->iterator.get();
         int32_t batch_size = context->batch_size;
+        const rocksdb::Slice &start = context->start;
         const rocksdb::Slice &stop = context->stop;
         bool stop_inclusive = context->stop_inclusive;
         ::dsn::apps::filter_type::type hash_key_filter_type = context->hash_key_filter_type;
@@ -1320,18 +1450,91 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
         ::dsn::apps::filter_type::type sort_key_filter_type = context->sort_key_filter_type;
         const ::dsn::blob &sort_key_filter_pattern = context->sort_key_filter_pattern;
         bool no_value = context->no_value;
+        bool hash_sort_range = context->hash_sort_range;
         bool complete = false;
         uint32_t epoch_now = ::pegasus::utils::epoch_now();
         uint64_t expire_count = 0;
         uint64_t filter_count = 0;
         int32_t count = 0;
 
+        // TODO wss P4: need to think about compatibility with hash_key_filter_type, etc
+        ::dsn::blob start_hashkey, start_sortkey, stop_hashkey, stop_sortkey, range_start_key,
+            range_stop_key, temp_hashkey, temp_sortkey;
+        rocksdb::Slice range_stop, range_start;
+        if (hash_sort_range) {
+            // get range start and final stop
+            pegasus_restore_key(
+                ::dsn::blob(start.data(), 0, start.length()), start_hashkey, start_sortkey);
+            pegasus_restore_key(
+                ::dsn::blob(stop.data(), 0, stop.length()), stop_hashkey, stop_sortkey);
+            pegasus_generate_key(range_start_key, start_hashkey, start_sortkey);
+            pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+            range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
+            range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+        }
+
         while (count < batch_size && it->Valid()) {
-            int c = it->key().compare(stop);
+            int c = hash_sort_range ? it->key().compare(range_stop) : it->key().compare(stop);
             if (c > 0 || (c == 0 && !stop_inclusive)) {
                 // out of range
-                complete = true;
-                break;
+                ddebug("wss: hit range_stop [%s] without key [%s]",
+                       hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                       : ::pegasus::utils::c_escape_string(stop).c_str(),
+                       ::pegasus::utils::c_escape_string(it->key()).c_str());
+
+                // seek new start key for next range
+                if (hash_sort_range) {
+                    // generate key = next_hashkey + start_sortkey
+                    pegasus_restore_key(
+                        range_start_key,
+                        start_hashkey,
+                        temp_sortkey); // temp_sortkey is unused, can we input start_sortkey here?
+                    pegasus_restore_key(::dsn::blob(it->key().data(), 0, it->key().length()),
+                                        temp_hashkey,
+                                        temp_sortkey); // temp_sortkey is unused
+                    if (c == 0 ||
+                        (temp_hashkey.length() == start_hashkey.length() &&
+                         memcmp(temp_hashkey.data(), start_hashkey.data(), temp_hashkey.length()) ==
+                             0)) {
+                        pegasus_generate_next_blob_by_hashkey(
+                            range_start_key, start_hashkey, start_sortkey);
+                        pegasus_generate_next_blob_by_hashkey(
+                            range_stop_key, start_hashkey, stop_sortkey);
+                        ddebug("wss: new range from start_hashkey");
+                    } else {
+                        pegasus_generate_key(range_start_key, temp_hashkey, start_sortkey);
+                        pegasus_generate_key(range_stop_key, temp_hashkey, stop_sortkey);
+                        ddebug("wss: new range from temp_hashkey");
+                    }
+                    range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
+                    if (range_start.compare(stop) > 0) {
+                        ddebug("wss: new range_start [%s] over final stop [%s], finished last "
+                               "range, no more ranges",
+                               ::pegasus::utils::c_escape_string(range_start).c_str(),
+                               ::pegasus::utils::c_escape_string(stop).c_str());
+                        complete = true;
+                        break;
+                    }
+                    range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+                    context->update_start(range_start);
+                    it->Seek(range_start);
+                    if (!it->Valid()) {
+                        ddebug("wss: no more ranges");
+                        complete = true;
+                        break;
+                    } else if (it->key().compare(stop) >= 0 || it->key().compare(range_stop) >= 0) {
+                        ddebug("wss: go over range [%s, %s]",
+                               ::pegasus::utils::c_escape_string(range_start).c_str(),
+                               ::pegasus::utils::c_escape_string(range_stop).c_str());
+                        continue;
+                    }
+                    ddebug("wss: go to next range [%s, %s]",
+                           ::pegasus::utils::c_escape_string(range_start).c_str(),
+                           ::pegasus::utils::c_escape_string(range_stop).c_str());
+                } else {
+                    complete = true;
+                    break;
+                }
             }
 
             int r = append_key_value_for_scan(resp.kvs,
@@ -1353,8 +1556,47 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
 
             if (c == 0) {
                 // seek to the last position
-                complete = true;
-                break;
+                ddebug("wss: hit range_stop [%s] with key [%s]",
+                       hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                       : ::pegasus::utils::c_escape_string(stop).c_str(),
+                       ::pegasus::utils::c_escape_string(it->key()).c_str());
+
+                // seek new start key for next range
+                if (hash_sort_range) {
+                    // generate key = next_hashkey + start_sortkey
+                    pegasus_restore_key(
+                        range_start_key,
+                        start_hashkey,
+                        temp_sortkey); // temp_sortkey is unused, can we input start_sortkey here?
+                    pegasus_generate_next_blob_by_hashkey(
+                        range_start_key, start_hashkey, start_sortkey);
+                    pegasus_generate_next_blob_by_hashkey(
+                        range_stop_key, start_hashkey, stop_sortkey);
+                    range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
+                    if (range_start.compare(stop) > 0) {
+                        ddebug("wss: new range_start [%s] over final stop [%s], finished last "
+                               "range, no more ranges",
+                               ::pegasus::utils::c_escape_string(range_start).c_str(),
+                               ::pegasus::utils::c_escape_string(stop).c_str());
+                        complete = true;
+                        break;
+                    }
+                    range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+                    context->update_start(range_start);
+                    it->Seek(range_start);
+                    if (!it->Valid()) {
+                        ddebug("wss: no more ranges");
+                        complete = true;
+                        break;
+                    }
+                    ddebug("wss: go to next range [%s, %s]",
+                           ::pegasus::utils::c_escape_string(range_start).c_str(),
+                           ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    continue;
+                } else {
+                    complete = true;
+                    break;
+                }
             }
 
             it->Next();
@@ -1370,7 +1612,8 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
                        replica_name(),
                        reply.to_address().to_string(),
                        request.context_id,
-                       ::pegasus::utils::c_escape_string(stop).c_str(),
+                       hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                       : ::pegasus::utils::c_escape_string(stop).c_str(),
                        stop_inclusive ? "inclusive" : "exclusive",
                        batch_size,
                        count,
@@ -1579,7 +1822,7 @@ void pegasus_server_impl::on_clear_scanner(const int64_t &args) { _context_cache
             // The timer task will always running even though there is no replicas
             _update_server_rdb_stat = ::dsn::tasking::enqueue_timer(
                 LPC_REPLICATION_LONG_COMMON,
-                nullptr,              // TODO: the tracker is nullptr, we will fix it later
+                nullptr, // TODO: the tracker is nullptr, we will fix it later
                 [this]() { update_server_rocksdb_statistics(); },
                 _update_rdb_stat_interval);
         });

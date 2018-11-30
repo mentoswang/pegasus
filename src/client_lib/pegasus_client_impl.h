@@ -234,6 +234,24 @@ public:
         const scan_options &options,
         async_get_unordered_scanners_callback_t &&callback) override;
 
+    virtual int
+    get_unordered_multirange_scanners(int max_split_count,
+                                      const std::string &start_hashkey,
+                                      const std::string &stop_hashkey,
+                                      const std::string &start_sortkey,
+                                      const std::string &stop_sortkey,
+                                      const scan_options &options,
+                                      std::vector<pegasus_scanner *> &scanners) override;
+
+    virtual void async_get_unordered_multirange_scanners(
+            int max_split_count,
+            const std::string &start_hashkey,
+            const std::string &stop_hashkey,
+            const std::string &start_sortkey,
+            const std::string &stop_sortkey,
+            const scan_options &options,
+            async_get_unordered_scanners_callback_t &&callback) override;
+
     virtual int get_sorted_scanner(const std::string &start_hashkey,
                                    const std::string &stop_hashkey,
                                    const std::string &start_sortkey,
@@ -278,6 +296,12 @@ public:
                              const scan_options &options,
                              const ::dsn::blob &start_key,
                              const ::dsn::blob &stop_key);
+        pegasus_scanner_impl(::dsn::apps::rrdb_client *client,
+                             std::vector<uint64_t> &&hash,
+                             const scan_options &options,
+                             const ::dsn::blob &start_key,
+                             const ::dsn::blob &stop_key,
+                             const bool hash_sort_range);
 
     private:
         ::dsn::apps::rrdb_client *_client;
@@ -285,6 +309,7 @@ public:
         ::dsn::blob _stop_key;
         scan_options _options;
         std::vector<uint64_t> _splits_hash;
+        bool _hash_sort_range;
 
         uint64_t _hash;
         std::vector<::dsn::apps::key_value> _kvs;

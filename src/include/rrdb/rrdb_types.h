@@ -1554,7 +1554,8 @@ typedef struct _get_scanner_request__isset
           hash_key_filter_type(false),
           hash_key_filter_pattern(false),
           sort_key_filter_type(false),
-          sort_key_filter_pattern(false)
+          sort_key_filter_pattern(false),
+          hash_sort_range(false)
     {
     }
     bool start_key : 1;
@@ -1567,6 +1568,7 @@ typedef struct _get_scanner_request__isset
     bool hash_key_filter_pattern : 1;
     bool sort_key_filter_type : 1;
     bool sort_key_filter_pattern : 1;
+    bool hash_sort_range : 1;
 } _get_scanner_request__isset;
 
 class get_scanner_request
@@ -1582,7 +1584,8 @@ public:
           batch_size(0),
           no_value(0),
           hash_key_filter_type((filter_type::type)0),
-          sort_key_filter_type((filter_type::type)0)
+          sort_key_filter_type((filter_type::type)0),
+          hash_sort_range(0)
     {
     }
 
@@ -1597,6 +1600,7 @@ public:
     ::dsn::blob hash_key_filter_pattern;
     filter_type::type sort_key_filter_type;
     ::dsn::blob sort_key_filter_pattern;
+    bool hash_sort_range;
 
     _get_scanner_request__isset __isset;
 
@@ -1620,6 +1624,8 @@ public:
 
     void __set_sort_key_filter_pattern(const ::dsn::blob &val);
 
+    void __set_hash_sort_range(const bool val);
+
     bool operator==(const get_scanner_request &rhs) const
     {
         if (!(start_key == rhs.start_key))
@@ -1641,6 +1647,8 @@ public:
         if (!(sort_key_filter_type == rhs.sort_key_filter_type))
             return false;
         if (!(sort_key_filter_pattern == rhs.sort_key_filter_pattern))
+            return false;
+        if (!(hash_sort_range == rhs.hash_sort_range))
             return false;
         return true;
     }

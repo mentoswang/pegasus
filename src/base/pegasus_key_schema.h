@@ -81,6 +81,24 @@ void pegasus_generate_next_blob(::dsn::blob &next, const T &hash_key, const T &s
     next = buf.range(0, p - (unsigned char *)(buf.data()) + 1);
 }
 
+// generate the adjacent next rocksdb key according to hash key and sort key.
+// T may be std::string or ::dsn::blob.
+// data is copied into 'next'.
+template <typename T>
+void pegasus_generate_next_blob_by_hashkey(::dsn::blob &next, const T &hash_key, const T &sort_key)
+{
+    //::dsn::blob buf;
+    pegasus_generate_key(next, hash_key, sort_key);
+
+    unsigned char *p = (unsigned char *)(next.data() + next.length() - sort_key.length() - 1);
+    while (*p == 0xFF) {
+        *p = '\0';
+        p--;
+    }
+    (*p)++;
+    // next = buf.range(0, p - (unsigned char *)(buf.data()) + 1);
+}
+
 // restore hash_key and sort_key from rocksdb value.
 // no data copied.
 inline void
