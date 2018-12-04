@@ -304,6 +304,10 @@ private:
     ::dsn::perf_counter_wrapper _pfc_rdb_block_cache_total_count;
     ::dsn::perf_counter_wrapper _pfc_rdb_index_and_filter_blocks_mem_usage;
     ::dsn::perf_counter_wrapper _pfc_rdb_memtable_mem_usage;
+
+    const char _holder[4] = {'\x00', '\x00', '\xFF', '\xFF'};
+    const ::dsn::blob _min_key = ::dsn::blob(_holder, 0, 2);
+    const ::dsn::blob _max_key = ::dsn::blob(_holder, 2, 2);
 };
 
 } // namespace server

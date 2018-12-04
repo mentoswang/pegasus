@@ -30,6 +30,7 @@ PEGASUS_ERR_CODE(PERR_GEO_DECODE_VALUE_ERROR,
                  -207,
                  "decode latitude and longitude from value error");
 PEGASUS_ERR_CODE(PERR_GEO_INVALID_LATLNG_ERROR, -208, "latitude or longitude is invalid");
+PEGASUS_ERR_CODE(PERR_INVALID_SORT_KEY, -209, "sort key can't be empty");
 
 // SERVER ERROR
 // start from -301

@@ -1167,12 +1167,30 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
         range_stop_key, temp_hashkey, temp_sortkey;
     rocksdb::Slice range_stop, range_start;
     if (request.hash_sort_range) {
+        if (_verbose_log) {
+            ddebug("requested range [%s, %s]",
+                  ::pegasus::utils::c_escape_string(start).c_str(),
+                  ::pegasus::utils::c_escape_string(stop).c_str());
+        }
+
         pegasus_restore_key(request.start_key, start_hashkey, start_sortkey);
-        pegasus_restore_key(request.stop_key, stop_hashkey, stop_sortkey);
         pegasus_generate_key(range_start_key, start_hashkey, start_sortkey);
-        pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+
+        if (request.stop_key.length() == 2 &&
+            memcmp(request.stop_key.data(), _max_key.data(), 2) == 0) { // stop key is max key
+            pegasus_generate_next_blob(range_stop_key, start_hashkey);
+        } else { // stop key is not max key
+            pegasus_restore_key(request.stop_key, stop_hashkey, stop_sortkey);
+            pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+        }
+
         range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
         range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+        if (_verbose_log) {
+            ddebug("requested sub range [%s, %s]",
+                  ::pegasus::utils::c_escape_string(range_start).c_str(),
+                  ::pegasus::utils::c_escape_string(range_stop).c_str());
+        }
     }
 
     // check if range is empty
@@ -1214,6 +1232,11 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
             reply(resp);
             return;
         }
+        if (_verbose_log) {
+            ddebug("go to first range [%s, %s]",
+                  ::pegasus::utils::c_escape_string(range_start).c_str(),
+                  ::pegasus::utils::c_escape_string(range_stop).c_str());
+        }
     }
 
     std::unique_ptr<rocksdb::Iterator> it(_db->NewIterator(_rd_opts));
@@ -1229,10 +1252,13 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
         int c = request.hash_sort_range ? it->key().compare(range_stop) : it->key().compare(stop);
         if (c > 0 || (c == 0 && !stop_inclusive)) {
             // out of range
-            ddebug("wss: hit range_stop [%s] without key [%s]",
-                   request.hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
-                                           : ::pegasus::utils::c_escape_string(stop).c_str(),
-                   ::pegasus::utils::c_escape_string(it->key()).c_str());
+            if (_verbose_log) {
+                ddebug("hit range_stop [%s] before append key [%s]",
+                      request.hash_sort_range
+                          ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                          : ::pegasus::utils::c_escape_string(stop).c_str(),
+                      ::pegasus::utils::c_escape_string(it->key()).c_str());
+            }
 
             // seek new start key for next range
             if (request.hash_sort_range) {
@@ -1258,29 +1284,36 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
                 }
                 range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
                 if (range_start.compare(stop) > 0) {
-                    ddebug("wss: new range_start [%s] over final stop [%s], finished last range, "
-                           "no more "
-                           "ranges",
-                           ::pegasus::utils::c_escape_string(range_start).c_str(),
-                           ::pegasus::utils::c_escape_string(stop).c_str());
+                    if (_verbose_log) {
+                        ddebug("new range_start [%s] over final stop [%s], finished last range, no "
+                               "more ranges",
+                               ::pegasus::utils::c_escape_string(range_start).c_str(),
+                               ::pegasus::utils::c_escape_string(stop).c_str());
+                    }
                     complete = true;
                     break;
                 }
                 range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
                 it->Seek(range_start);
                 if (!it->Valid()) {
-                    ddebug("wss: no more ranges");
+                    if (_verbose_log) {
+                        ddebug("no more ranges");
+                    }
                     complete = true;
                     break;
                 } else if (it->key().compare(stop) >= 0 || it->key().compare(range_stop) >= 0) {
-                    ddebug("wss: go over range [%s, %s]",
-                           ::pegasus::utils::c_escape_string(range_start).c_str(),
-                           ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    if (_verbose_log) {
+                        ddebug("go over range [%s, %s]",
+                              ::pegasus::utils::c_escape_string(range_start).c_str(),
+                              ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    }
                     continue;
                 }
-                ddebug("wss: go to next range [%s, %s]",
-                       ::pegasus::utils::c_escape_string(range_start).c_str(),
-                       ::pegasus::utils::c_escape_string(range_stop).c_str());
+                if (_verbose_log) {
+                    ddebug("go to next range [%s, %s]",
+                          ::pegasus::utils::c_escape_string(range_start).c_str(),
+                          ::pegasus::utils::c_escape_string(range_stop).c_str());
+                }
             } else {
                 complete = true;
                 break;
@@ -1315,10 +1348,13 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
 
         if (c == 0) {
             // seek to the last position
-            ddebug("wss: hit range_stop [%s] with key [%s]",
-                   request.hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
-                                           : ::pegasus::utils::c_escape_string(stop).c_str(),
-                   ::pegasus::utils::c_escape_string(it->key()).c_str());
+            if (_verbose_log) {
+                ddebug("hit range_stop [%s] after append key [%s]",
+                      request.hash_sort_range
+                          ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                          : ::pegasus::utils::c_escape_string(stop).c_str(),
+                      ::pegasus::utils::c_escape_string(it->key()).c_str());
+            }
 
             // seek new start key for next range
             if (request.hash_sort_range) {
@@ -1332,23 +1368,29 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
                 pegasus_generate_next_blob_by_hashkey(range_stop_key, start_hashkey, stop_sortkey);
                 range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
                 if (range_start.compare(stop) > 0) {
-                    ddebug("wss: hit final stop [%s] with key [%s], finished last range, no more "
-                           "ranges",
-                           ::pegasus::utils::c_escape_string(stop).c_str(),
-                           ::pegasus::utils::c_escape_string(it->key()).c_str());
+                    if (_verbose_log) {
+                        ddebug("new range_start [%s] over final stop [%s], finished last range, no "
+                               "more ranges",
+                               ::pegasus::utils::c_escape_string(range_start).c_str(),
+                               ::pegasus::utils::c_escape_string(stop).c_str());
+                    }
                     complete = true;
                     break;
                 }
                 range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
                 it->Seek(range_start);
                 if (!it->Valid()) {
-                    ddebug("wss: no more ranges");
+                    if (_verbose_log) {
+                        ddebug("no more ranges");
+                    }
                     complete = true;
                     break;
                 }
-                ddebug("wss: go to next range [%s, %s]",
-                       ::pegasus::utils::c_escape_string(range_start).c_str(),
-                       ::pegasus::utils::c_escape_string(range_stop).c_str());
+                if (_verbose_log) {
+                    ddebug("go to next range [%s, %s]",
+                          ::pegasus::utils::c_escape_string(range_start).c_str(),
+                          ::pegasus::utils::c_escape_string(range_stop).c_str());
+                }
                 continue;
             }
 
@@ -1462,25 +1504,45 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
             range_stop_key, temp_hashkey, temp_sortkey;
         rocksdb::Slice range_stop, range_start;
         if (hash_sort_range) {
+            if (_verbose_log) {
+                ddebug("requested range [%s, %s]",
+                      ::pegasus::utils::c_escape_string(start).c_str(),
+                      ::pegasus::utils::c_escape_string(stop).c_str());
+            }
+
             // get range start and final stop
             pegasus_restore_key(
                 ::dsn::blob(start.data(), 0, start.length()), start_hashkey, start_sortkey);
-            pegasus_restore_key(
-                ::dsn::blob(stop.data(), 0, stop.length()), stop_hashkey, stop_sortkey);
             pegasus_generate_key(range_start_key, start_hashkey, start_sortkey);
-            pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+
+            if (stop.length() == 2 &&
+                memcmp(stop.data(), _max_key.data(), 2) == 0) { // stop key is max key
+                pegasus_generate_next_blob(range_stop_key, start_hashkey);
+            } else { // stop key is not max key
+                pegasus_restore_key(
+                    ::dsn::blob(stop.data(), 0, stop.length()), stop_hashkey, stop_sortkey);
+                pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+            }
+
             range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
             range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
+            if (_verbose_log) {
+                ddebug("requested sub range [%s, %s]",
+                      ::pegasus::utils::c_escape_string(range_start).c_str(),
+                      ::pegasus::utils::c_escape_string(range_stop).c_str());
+            }
         }
 
         while (count < batch_size && it->Valid()) {
             int c = hash_sort_range ? it->key().compare(range_stop) : it->key().compare(stop);
             if (c > 0 || (c == 0 && !stop_inclusive)) {
                 // out of range
-                ddebug("wss: hit range_stop [%s] without key [%s]",
-                       hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
-                                       : ::pegasus::utils::c_escape_string(stop).c_str(),
-                       ::pegasus::utils::c_escape_string(it->key()).c_str());
+                if (_verbose_log) {
+                    ddebug("hit range_stop [%s] before append key [%s]",
+                          hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                          : ::pegasus::utils::c_escape_string(stop).c_str(),
+                          ::pegasus::utils::c_escape_string(it->key()).c_str());
+                }
 
                 // seek new start key for next range
                 if (hash_sort_range) {
@@ -1500,18 +1562,18 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
                             range_start_key, start_hashkey, start_sortkey);
                         pegasus_generate_next_blob_by_hashkey(
                             range_stop_key, start_hashkey, stop_sortkey);
-                        ddebug("wss: new range from start_hashkey");
                     } else {
                         pegasus_generate_key(range_start_key, temp_hashkey, start_sortkey);
                         pegasus_generate_key(range_stop_key, temp_hashkey, stop_sortkey);
-                        ddebug("wss: new range from temp_hashkey");
                     }
                     range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
                     if (range_start.compare(stop) > 0) {
-                        ddebug("wss: new range_start [%s] over final stop [%s], finished last "
-                               "range, no more ranges",
-                               ::pegasus::utils::c_escape_string(range_start).c_str(),
-                               ::pegasus::utils::c_escape_string(stop).c_str());
+                        if (_verbose_log) {
+                            ddebug("new range_start [%s] over final stop [%s], finished last range, "
+                                  "no more ranges",
+                                  ::pegasus::utils::c_escape_string(range_start).c_str(),
+                                  ::pegasus::utils::c_escape_string(stop).c_str());
+                        }
                         complete = true;
                         break;
                     }
@@ -1519,18 +1581,24 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
                     context->update_start(range_start);
                     it->Seek(range_start);
                     if (!it->Valid()) {
-                        ddebug("wss: no more ranges");
+                        if (_verbose_log) {
+                            ddebug("no more ranges");
+                        }
                         complete = true;
                         break;
                     } else if (it->key().compare(stop) >= 0 || it->key().compare(range_stop) >= 0) {
-                        ddebug("wss: go over range [%s, %s]",
-                               ::pegasus::utils::c_escape_string(range_start).c_str(),
-                               ::pegasus::utils::c_escape_string(range_stop).c_str());
+                        if (_verbose_log) {
+                            ddebug("go over range [%s, %s]",
+                                  ::pegasus::utils::c_escape_string(range_start).c_str(),
+                                  ::pegasus::utils::c_escape_string(range_stop).c_str());
+                        }
                         continue;
                     }
-                    ddebug("wss: go to next range [%s, %s]",
-                           ::pegasus::utils::c_escape_string(range_start).c_str(),
-                           ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    if (_verbose_log) {
+                        ddebug("go to next range [%s, %s]",
+                              ::pegasus::utils::c_escape_string(range_start).c_str(),
+                              ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    }
                 } else {
                     complete = true;
                     break;
@@ -1556,10 +1624,12 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
 
             if (c == 0) {
                 // seek to the last position
-                ddebug("wss: hit range_stop [%s] with key [%s]",
-                       hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
-                                       : ::pegasus::utils::c_escape_string(stop).c_str(),
-                       ::pegasus::utils::c_escape_string(it->key()).c_str());
+                if (_verbose_log) {
+                    ddebug("hit range_stop [%s] after append key [%s]",
+                          hash_sort_range ? ::pegasus::utils::c_escape_string(range_stop).c_str()
+                                          : ::pegasus::utils::c_escape_string(stop).c_str(),
+                          ::pegasus::utils::c_escape_string(it->key()).c_str());
+                }
 
                 // seek new start key for next range
                 if (hash_sort_range) {
@@ -1574,10 +1644,12 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
                         range_stop_key, start_hashkey, stop_sortkey);
                     range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
                     if (range_start.compare(stop) > 0) {
-                        ddebug("wss: new range_start [%s] over final stop [%s], finished last "
-                               "range, no more ranges",
-                               ::pegasus::utils::c_escape_string(range_start).c_str(),
-                               ::pegasus::utils::c_escape_string(stop).c_str());
+                        if (_verbose_log) {
+                            ddebug("new range_start [%s] over final stop [%s], finished last range, "
+                                  "no more ranges",
+                                  ::pegasus::utils::c_escape_string(range_start).c_str(),
+                                  ::pegasus::utils::c_escape_string(stop).c_str());
+                        }
                         complete = true;
                         break;
                     }
@@ -1585,13 +1657,17 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
                     context->update_start(range_start);
                     it->Seek(range_start);
                     if (!it->Valid()) {
-                        ddebug("wss: no more ranges");
+                        if (_verbose_log) {
+                            ddebug("no more ranges");
+                        }
                         complete = true;
                         break;
                     }
-                    ddebug("wss: go to next range [%s, %s]",
-                           ::pegasus::utils::c_escape_string(range_start).c_str(),
-                           ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    if (_verbose_log) {
+                        ddebug("go to next range [%s, %s]",
+                              ::pegasus::utils::c_escape_string(range_start).c_str(),
+                              ::pegasus::utils::c_escape_string(range_stop).c_str());
+                    }
                     continue;
                 } else {
                     complete = true;
