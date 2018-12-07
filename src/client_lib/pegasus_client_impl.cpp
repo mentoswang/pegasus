@@ -1470,7 +1470,7 @@ int pegasus_client_impl::get_sorted_scanner(const std::string &start_hashkey,
         // full scan
         async_get_unordered_scanners(max_split_count, options, std::move(callback));
     } else if ((start_hashkey.empty() && !start_sortkey.empty()) ||
-               (stop_hashkey.empty() && !start_sortkey.empty())) {
+               (stop_hashkey.empty() && !stop_sortkey.empty())) {
         derror("invalid key range: hash key cannot be empty when sort key is not empty for range "
                "scan");
         return PERR_INVALID_HASH_KEY;

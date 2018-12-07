@@ -108,7 +108,7 @@ pegasus_client_impl::pegasus_sorted_scanner_impl::get_smart_wrapper()
 
 pegasus_client_impl::pegasus_sorted_scanner_impl::~pegasus_sorted_scanner_impl()
 {
-    dassert(_replica_scanner_queue.empty(), "queue should be empty");
+    // dassert(_replica_scanner_queue.empty(), "queue should be empty");
     for (auto scanner : _replica_scanners) {
         delete scanner;
     }
