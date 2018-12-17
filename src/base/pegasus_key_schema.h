@@ -46,7 +46,7 @@ void pegasus_generate_key(::dsn::blob &key, const T &hash_key, const T &sort_key
 // T may be std::string or ::dsn::blob.
 // data is copied into 'next'.
 template <typename T>
-void pegasus_generate_next_blob(::dsn::blob &next, const T &hash_key)
+void pegasus_generate_next_blob(::dsn::blob &next, const T &hash_key, const bool reverse = false)
 {
     dassert(hash_key.length() < UINT16_MAX, "hash key length must be less than UINT16_MAX");
 
@@ -57,10 +57,16 @@ void pegasus_generate_next_blob(::dsn::blob &next, const T &hash_key)
     ::memcpy(buf.get() + 2, hash_key.data(), hash_key_len);
 
     unsigned char *p = (unsigned char *)(buf.get() + hash_key_len + 1);
-    while (*p == 0xFF)
-        p--;
-    (*p)++;
-
+    if(!reverse) {
+        while (*p == 0xFF)
+            p--;
+        (*p)++;
+    } else {
+        while (*p == 0x00)
+            p--;
+        (*p)--;
+    }
+    // data will be truncated
     next.assign(std::move(buf), 0, p - (unsigned char *)(buf.get()) + 1);
 }
 
@@ -85,18 +91,29 @@ void pegasus_generate_next_blob(::dsn::blob &next, const T &hash_key, const T &s
 // T may be std::string or ::dsn::blob.
 // data is copied into 'next'.
 template <typename T>
-void pegasus_generate_next_blob_by_hashkey(::dsn::blob &next, const T &hash_key, const T &sort_key)
+void pegasus_generate_next_blob_by_hashkey(::dsn::blob &next,
+                                           const T &hash_key,
+                                           const T &sort_key,
+                                           const bool reverse = false)
 {
-    //::dsn::blob buf;
     pegasus_generate_key(next, hash_key, sort_key);
 
     unsigned char *p = (unsigned char *)(next.data() + next.length() - sort_key.length() - 1);
-    while (*p == 0xFF) {
-        *p = '\0';
-        p--;
+
+    if(!reverse) {
+        while (*p == 0xFF) {
+            *p = '\0';
+            p--;
+        }
+        (*p)++;
     }
-    (*p)++;
-    // next = buf.range(0, p - (unsigned char *)(buf.data()) + 1);
+    else {
+        while (*p == 0x00) {
+            *p = 0xFF;
+            p--;
+        }
+        (*p)--;
+    }
 }
 
 // restore hash_key and sort_key from rocksdb value.

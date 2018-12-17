@@ -12,8 +12,8 @@ namespace pegasus {
 namespace client {
 
 pegasus_client_impl::pegasus_sorted_scanner_impl::pegasus_sorted_scanner_impl(
-    std::vector<pegasus_scanner *> &&scanners)
-    : _replica_scanners(std::move(scanners))
+    std::vector<pegasus_scanner *> &&scanners, bool reverse)
+    : _replica_scanners(std::move(scanners)), _reverse(reverse)
 {
 }
 
@@ -49,7 +49,7 @@ int pegasus_client_impl::pegasus_sorted_scanner_impl::next(std::string &hashkey,
             return ret;
 
         // get the lowest hashkey entry
-        auto it = _replica_scanner_queue.begin();
+        auto it = _reverse ? --(_replica_scanner_queue.end()) : _replica_scanner_queue.begin();
         hashkey = it->second.hashkey;
         sortkey = it->second.sortkey;
         value = it->second.value;
@@ -70,7 +70,7 @@ int pegasus_client_impl::pegasus_sorted_scanner_impl::next(std::string &hashkey,
         }
     } else {
         // get the lowest hashkey entry
-        auto it = _replica_scanner_queue.begin();
+        auto it = _reverse ? --(_replica_scanner_queue.end()) : _replica_scanner_queue.begin();
         hashkey = it->second.hashkey;
         sortkey = it->second.sortkey;
         value = it->second.value;
@@ -112,6 +112,7 @@ pegasus_client_impl::pegasus_sorted_scanner_impl::~pegasus_sorted_scanner_impl()
     for (auto scanner : _replica_scanners) {
         delete scanner;
     }
+    _replica_scanners.clear();
 }
 
 void pegasus_client_impl::pegasus_sorted_scanner_impl_wrapper::async_next(

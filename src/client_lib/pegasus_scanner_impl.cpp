@@ -216,6 +216,7 @@ void pegasus_client_impl::pegasus_scanner_impl::_start_scan()
     req.sort_key_filter_pattern = ::dsn::blob(
         _options.sort_key_filter_pattern.data(), 0, _options.sort_key_filter_pattern.size());
     req.no_value = _options.no_value;
+    req.reverse = _options.reverse;
     req.hash_sort_range = _hash_sort_range;
 
     dassert(!_rpc_started, "");

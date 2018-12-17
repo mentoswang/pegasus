@@ -21,6 +21,7 @@ struct pegasus_scan_context
     pegasus_scan_context(std::unique_ptr<rocksdb::Iterator> &&iterator_,
                          const std::string &&start_,
                          const std::string &&stop_,
+                         bool start_inclusive_,
                          bool stop_inclusive_,
                          ::dsn::apps::filter_type::type hash_key_filter_type_,
                          const std::string &&hash_key_filter_pattern_,
@@ -28,7 +29,8 @@ struct pegasus_scan_context
                          const std::string &&sort_key_filter_pattern_,
                          int32_t batch_size_,
                          bool no_value_,
-                         bool hash_sort_range_)
+                         bool hash_sort_range_,
+                         bool reverse_)
         : _start_holder(std::move(start_)),
           _stop_holder(std::move(stop_)),
           _hash_key_filter_pattern_holder(std::move(hash_key_filter_pattern_)),
@@ -36,6 +38,7 @@ struct pegasus_scan_context
           iterator(std::move(iterator_)),
           start(_start_holder.data(), _start_holder.size()),
           stop(_stop_holder.data(), _stop_holder.size()),
+          start_inclusive(start_inclusive_),
           stop_inclusive(stop_inclusive_),
           hash_key_filter_type(hash_key_filter_type_),
           hash_key_filter_pattern(
@@ -45,7 +48,8 @@ struct pegasus_scan_context
               _sort_key_filter_pattern_holder.data(), 0, _sort_key_filter_pattern_holder.length()),
           batch_size(batch_size_),
           no_value(no_value_),
-          hash_sort_range(hash_sort_range_)
+          hash_sort_range(hash_sort_range_),
+          reverse(reverse_)
     {
     }
 
@@ -59,6 +63,7 @@ public:
     std::unique_ptr<rocksdb::Iterator> iterator;
     rocksdb::Slice start;
     rocksdb::Slice stop;
+    bool start_inclusive;
     bool stop_inclusive;
     ::dsn::apps::filter_type::type hash_key_filter_type;
     dsn::blob hash_key_filter_pattern;
@@ -67,6 +72,7 @@ public:
     int32_t batch_size;
     bool no_value;
     bool hash_sort_range;
+    bool reverse;
 
     void update_start(rocksdb::Slice new_start)
     {

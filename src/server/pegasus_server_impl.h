@@ -239,6 +239,22 @@ private:
             _value_schema_version, epoch_now, utils::to_string_view(raw_value));
     }
 
+    bool generate_first_scan_range(const rocksdb::Slice start,
+                                   const rocksdb::Slice stop,
+                                   ::dsn::blob &range_start_key,
+                                   ::dsn::blob &range_stop_key,
+                                   const bool reverse);
+
+    void generate_next_scan_range(const rocksdb::Slice key,
+                                  ::dsn::blob &range_start_key,
+                                  ::dsn::blob &range_stop_key,
+                                  const bool reverse);
+
+    void generate_reverse_first_scan_range(const rocksdb::Slice key,
+                                           const rocksdb::Slice start,
+                                           ::dsn::blob &range_start_key,
+                                           ::dsn::blob &range_stop_key);
+
 private:
     dsn::gpid _gpid;
     std::string _primary_address;

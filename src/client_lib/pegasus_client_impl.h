@@ -329,7 +329,7 @@ public:
 
         ~pegasus_sorted_scanner_impl() override;
 
-        pegasus_sorted_scanner_impl(std::vector<pegasus_scanner *> &&scanners);
+        pegasus_sorted_scanner_impl(std::vector<pegasus_scanner *> &&scanners, bool reverse);
 
     private:
         //        ::dsn::apps::rrdb_client *_client;
@@ -337,6 +337,7 @@ public:
         //        ::dsn::blob _stop_key;
         //        scan_options _options;
         std::vector<pegasus_scanner *> _replica_scanners;
+        bool _reverse;
 
         struct replica_scan_item
         {

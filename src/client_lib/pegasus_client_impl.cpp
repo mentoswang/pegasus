@@ -1290,10 +1290,6 @@ void pegasus_client_impl::async_get_unordered_range_scanners(
     ::dsn::blob sub_stop;
 
     scan_options o(options);
-    // only support inclusive, because complex behavior of exclusive for multiple range
-    o.start_inclusive = true;
-    o.stop_inclusive = true;
-
     bool multi_range = false;
 
     if (!callback) {
@@ -1368,7 +1364,7 @@ void pegasus_client_impl::async_get_unordered_range_scanners(
         return;
     }
     // check empty sub range
-    if(multi_range && !stop_sortkey.empty()) {
+    if (multi_range && !stop_sortkey.empty()) {
         pegasus_generate_key(sub_stop, start_hashkey, stop_sortkey);
         if (::dsn::string_view(start).compare(sub_stop) > 0) {
             dwarn("empty key sub range for multiple range scan");
@@ -1462,7 +1458,7 @@ int pegasus_client_impl::get_sorted_scanner(const std::string &start_hashkey,
     std::vector<pegasus_scanner *> scanners;
     auto callback = [&](int err, std::vector<pegasus_scanner *> &&ss) {
         ret = err;
-        scanner = new pegasus_sorted_scanner_impl(std::move(ss));
+        scanner = new pegasus_sorted_scanner_impl(std::move(ss), options.reverse);
         op_completed.notify();
     };
     if (start_hashkey.empty() && stop_hashkey.empty() && start_sortkey.empty() &&
