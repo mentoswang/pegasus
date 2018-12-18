@@ -243,17 +243,23 @@ private:
                                    const rocksdb::Slice stop,
                                    ::dsn::blob &range_start_key,
                                    ::dsn::blob &range_stop_key,
+                                   const bool start_inclusive,
+                                   const bool stop_inclusive,
                                    const bool reverse);
 
     void generate_next_scan_range(const rocksdb::Slice key,
                                   ::dsn::blob &range_start_key,
                                   ::dsn::blob &range_stop_key,
+                                  const bool start_inclusive,
+                                  const bool stop_inclusive,
                                   const bool reverse);
 
     void generate_reverse_first_scan_range(const rocksdb::Slice key,
                                            const rocksdb::Slice start,
                                            ::dsn::blob &range_start_key,
-                                           ::dsn::blob &range_stop_key);
+                                           ::dsn::blob &range_stop_key,
+                                           const bool start_inclusive,
+                                           const bool stop_inclusive);
 
 private:
     dsn::gpid _gpid;

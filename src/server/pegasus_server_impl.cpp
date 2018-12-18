@@ -1190,8 +1190,13 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
     rocksdb::Slice range_stop, range_start;
     bool max_stop = false;
     if (request.hash_sort_range) {
-        max_stop = generate_first_scan_range(
-            start, stop, range_start_key, range_stop_key, request.reverse);
+        max_stop = generate_first_scan_range(start,
+                                             stop,
+                                             range_start_key,
+                                             range_stop_key,
+                                             start_inclusive,
+                                             stop_inclusive,
+                                             request.reverse);
         range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
         range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
     }
@@ -1262,7 +1267,8 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
         // generate actual first sub range for reverse multiple range scan if stop key is empty
         if (request.hash_sort_range && max_stop && it->Valid() &&
             it->key().length() >= _min_key.length()) {
-            generate_reverse_first_scan_range(it->key(), stop, range_start_key, range_stop_key);
+            generate_reverse_first_scan_range(
+                it->key(), stop, range_start_key, range_stop_key, start_inclusive, stop_inclusive);
             range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
             range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
 
@@ -1303,8 +1309,12 @@ void pegasus_server_impl::on_get_scanner(const ::dsn::apps::get_scanner_request 
                            ::pegasus::utils::c_escape_string(it->key()).c_str());
                 }
 
-                generate_next_scan_range(
-                    it->key(), range_start_key, range_stop_key, request.reverse);
+                generate_next_scan_range(it->key(),
+                                         range_start_key,
+                                         range_stop_key,
+                                         start_inclusive,
+                                         stop_inclusive,
+                                         request.reverse);
                 range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
                 range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
 
@@ -1535,7 +1545,13 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
         ::dsn::blob range_start_key, range_stop_key;
         rocksdb::Slice range_stop, range_start;
         if (hash_sort_range) {
-            generate_first_scan_range(start, stop, range_start_key, range_stop_key, reverse);
+            generate_first_scan_range(start,
+                                      stop,
+                                      range_start_key,
+                                      range_stop_key,
+                                      start_inclusive,
+                                      stop_inclusive,
+                                      reverse);
             range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
             range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
         }
@@ -1563,7 +1579,12 @@ void pegasus_server_impl::on_scan(const ::dsn::apps::scan_request &request,
                                ::pegasus::utils::c_escape_string(it->key()).c_str());
                     }
 
-                    generate_next_scan_range(it->key(), range_start_key, range_stop_key, reverse);
+                    generate_next_scan_range(it->key(),
+                                             range_start_key,
+                                             range_stop_key,
+                                             start_inclusive,
+                                             stop_inclusive,
+                                             reverse);
                     range_start = rocksdb::Slice(range_start_key.data(), range_start_key.length());
                     range_stop = rocksdb::Slice(range_stop_key.data(), range_stop_key.length());
 
@@ -2835,6 +2856,8 @@ bool pegasus_server_impl::generate_first_scan_range(const rocksdb::Slice start,
                                                     const rocksdb::Slice stop,
                                                     ::dsn::blob &range_start_key,
                                                     ::dsn::blob &range_stop_key,
+                                                    const bool start_inclusive,
+                                                    const bool stop_inclusive,
                                                     const bool reverse = false)
 {
     ::dsn::blob start_hashkey, start_sortkey, stop_hashkey, stop_sortkey;
@@ -2858,8 +2881,12 @@ bool pegasus_server_impl::generate_first_scan_range(const rocksdb::Slice start,
         pegasus_generate_key(range_start_key, start_hashkey, start_sortkey);
         if (max_key)
             pegasus_generate_next_blob(range_stop_key, start_hashkey);
-        else
-            pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+        else {
+            if (stop_sortkey.length() == 0)
+                pegasus_generate_next_blob(range_stop_key, start_hashkey);
+            else
+                pegasus_generate_key(range_stop_key, start_hashkey, stop_sortkey);
+        }
     } else {
         // reversed input start_key and stop_key
         if (max_key) {
@@ -2877,10 +2904,12 @@ bool pegasus_server_impl::generate_first_scan_range(const rocksdb::Slice start,
     }
 
     if (_verbose_log) {
-        ddebug("%s: fisrt sub range [%s, %s], %s",
+        ddebug("%s: fisrt sub range %s%s, %s%s, %s",
                replica_name(),
+               start_inclusive ? "[" : "(",
                ::pegasus::utils::c_escape_string(range_start_key).c_str(),
                ::pegasus::utils::c_escape_string(range_stop_key).c_str(),
+               stop_inclusive ? "]" : ")",
                reverse ? "DESC" : "ASC");
     }
     return max_key;
@@ -2889,6 +2918,8 @@ bool pegasus_server_impl::generate_first_scan_range(const rocksdb::Slice start,
 void pegasus_server_impl::generate_next_scan_range(const rocksdb::Slice key,
                                                    ::dsn::blob &range_start_key,
                                                    ::dsn::blob &range_stop_key,
+                                                   const bool start_inclusive,
+                                                   const bool stop_inclusive,
                                                    bool reverse = false)
 {
     ::dsn::blob start_hashkey, start_sortkey, stop_hashkey, stop_sortkey, hashkey, sortkey;
@@ -2915,10 +2946,12 @@ void pegasus_server_impl::generate_next_scan_range(const rocksdb::Slice key,
     }
 
     if (_verbose_log) {
-        ddebug("%s: next sub range [%s, %s], %s",
+        ddebug("%s: next sub range %s%s, %s%s, %s",
                replica_name(),
+               start_inclusive ? "[" : "(",
                ::pegasus::utils::c_escape_string(range_start_key).c_str(),
                ::pegasus::utils::c_escape_string(range_stop_key).c_str(),
+               stop_inclusive ? "]" : ")",
                reverse ? "DESC" : "ASC");
     }
 }
@@ -2927,7 +2960,9 @@ void pegasus_server_impl::generate_next_scan_range(const rocksdb::Slice key,
 void pegasus_server_impl::generate_reverse_first_scan_range(const rocksdb::Slice key,
                                                             const rocksdb::Slice stop,
                                                             ::dsn::blob &range_start_key,
-                                                            ::dsn::blob &range_stop_key)
+                                                            ::dsn::blob &range_stop_key,
+                                                            const bool start_inclusive,
+                                                            const bool stop_inclusive)
 {
     ::dsn::blob stop_hashkey, stop_sortkey, hashkey, sortkey;
     pegasus_restore_key(::dsn::blob(key.data(), 0, key.length()), hashkey, sortkey);
@@ -2937,11 +2972,13 @@ void pegasus_server_impl::generate_reverse_first_scan_range(const rocksdb::Slice
     pegasus_generate_key(range_stop_key, hashkey, stop_sortkey);
 
     if (_verbose_log) {
-        ddebug("%s: first key [%s], actual first sub range [%s, %s], DESC",
+        ddebug("%s: first key [%s], actual first sub range %s%s, %s%s, DESC",
                replica_name(),
                ::pegasus::utils::c_escape_string(key).c_str(),
+               start_inclusive ? "[" : "(",
                ::pegasus::utils::c_escape_string(range_start_key).c_str(),
-               ::pegasus::utils::c_escape_string(range_stop_key).c_str());
+               ::pegasus::utils::c_escape_string(range_stop_key).c_str(),
+               stop_inclusive ? "]" : ")");
     }
 }
 

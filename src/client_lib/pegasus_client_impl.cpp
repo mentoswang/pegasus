@@ -1290,6 +1290,9 @@ void pegasus_client_impl::async_get_unordered_range_scanners(
     ::dsn::blob sub_stop;
 
     scan_options o(options);
+    // only support inclusive for range scan
+    o.start_inclusive = true;
+    o.stop_inclusive = true;
     bool multi_range = false;
 
     if (!callback) {
@@ -1303,30 +1306,24 @@ void pegasus_client_impl::async_get_unordered_range_scanners(
         return;
     }
 
+    if ((start_hashkey.empty() && !start_sortkey.empty()) ||
+        (stop_hashkey.empty() && !stop_sortkey.empty())) {
+        derror("invalid key range: hash key cannot be empty when sort key is not empty for range "
+               "scan");
+        callback(PERR_INVALID_HASH_KEY, std::vector<pegasus_scanner *>());
+        return;
+    }
+
     // build start key
     if (!start_hashkey.empty()) {
         pegasus_generate_key(start, start_hashkey, start_sortkey);
         if (!start_sortkey.empty()) {
-            if (!stop_hashkey.empty() && stop_sortkey.empty()) {
-                derror(
-                    "invalid key range: stop sort key cannot be empty when start sort key is not "
-                    "empty for multiple range scan");
-                callback(PERR_INVALID_SORT_KEY, std::vector<pegasus_scanner *>());
-                return;
-            }
             multi_range = true;
         }
     } else {
-        if (!start_sortkey.empty()) {
-            derror("invalid key range: start hash key cannot be empty when start sort key is not "
-                   "empty for range scan");
-            callback(PERR_INVALID_HASH_KEY, std::vector<pegasus_scanner *>());
-            return;
-        } else {
-            // make the start key to min key
-            start = pegasus_client_impl::pegasus_scanner_impl::_min;
-            o.start_inclusive = false;
-        }
+        // make the start key to min key
+        start = pegasus_client_impl::pegasus_scanner_impl::_min;
+        o.start_inclusive = false;
     }
 
     // build stop key
@@ -1335,26 +1332,13 @@ void pegasus_client_impl::async_get_unordered_range_scanners(
         // to get all sortkeys under stop_hashkey
         pegasus_generate_next_blob(stop, stop_hashkey, stop_sortkey);
         if (!stop_sortkey.empty()) {
-            //            if (!start_hashkey.empty() && start_sortkey.empty()) {
-            //                derror("invalid key range: start sort key cannot be empty when stop
-            //                sort key is not empty for multiple range scan");
-            //                callback(PERR_INVALID_SORT_KEY, std::vector<pegasus_scanner *>());
-            //                return;
-            //            }
             multi_range = true;
         }
         o.stop_inclusive = false;
     } else {
-        if (!stop_sortkey.empty()) {
-            derror("invalid key range: stop hash key cannot be empty when stop sort key is not "
-                   "empty for range scan");
-            callback(PERR_INVALID_HASH_KEY, std::vector<pegasus_scanner *>());
-            return;
-        } else {
-            // make the stop key to max key
-            stop = pegasus_client_impl::pegasus_scanner_impl::_max;
-            o.stop_inclusive = false;
-        }
+        // make the stop key to max key
+        stop = pegasus_client_impl::pegasus_scanner_impl::_max;
+        o.stop_inclusive = false;
     }
 
     // check empty range
