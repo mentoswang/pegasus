@@ -2931,8 +2931,15 @@ void pegasus_server_impl::generate_next_scan_range(const rocksdb::Slice key,
 
     if (hashkey.length() == stop_hashkey.length() &&
         memcmp(hashkey.data(), stop_hashkey.data(), hashkey.length()) == 0) {
-        pegasus_generate_next_blob_by_hashkey(range_start_key, hashkey, start_sortkey, reverse);
-        pegasus_generate_next_blob_by_hashkey(range_stop_key, hashkey, stop_sortkey, reverse);
+        if (!reverse && stop_sortkey.length() == 0)
+            pegasus_generate_key(range_start_key, hashkey, start_sortkey);
+        else
+            pegasus_generate_next_blob_by_hashkey(range_start_key, hashkey, start_sortkey, reverse);
+
+        if (reverse && start_sortkey.length() == 0)
+            pegasus_generate_key(range_stop_key, hashkey, stop_sortkey);
+        else
+            pegasus_generate_next_blob_by_hashkey(range_stop_key, hashkey, stop_sortkey, reverse);
     } else {
         if (reverse && start_sortkey.length() == 0)
             pegasus_generate_next_blob(range_start_key, hashkey);
