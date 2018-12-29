@@ -181,15 +181,18 @@ pegasus_server_impl::pegasus_server_impl(dsn::replication::replica *r)
         "pegasus.server",
         "rocksdb_compression_type",
         "snappy",
-        "rocksdb options.compression, default snappy. Supported: none, snappy.");
+        "rocksdb options.compression, default snappy. Supported: none, snappy, zstd, lz4.");
     if (compression_str == "none") {
         _db_opts.compression = rocksdb::kNoCompression;
     } else if (compression_str == "snappy") {
         _db_opts.compression = rocksdb::kSnappyCompression;
+    } else if (compression_str == "zstd") {
+        _db_opts.compression = rocksdb::kZSTD;
+    } else if (compression_str == "lz4") {
+        _db_opts.compression = rocksdb::kLZ4Compression;
     } else {
         dassert("unsupported compression type: %s", compression_str.c_str());
     }
-
     if (_db_opts.compression != rocksdb::kNoCompression) {
         // only compress levels >= 2
         // refer to ColumnFamilyOptions::OptimizeLevelStyleCompaction()
@@ -2609,9 +2612,13 @@ void pegasus_server_impl::update_replica_rocksdb_statistics()
 
 void pegasus_server_impl::update_server_rocksdb_statistics()
 {
-    uint64_t val = _block_cache->GetUsage();
-    _pfc_rdb_block_cache_mem_usage->set(val);
-    ddebug_f("_pfc_rdb_block_cache_mem_usage: {} bytes", val);
+    if (_block_cache) {
+        uint64_t val = _block_cache->GetUsage();
+        _pfc_rdb_block_cache_mem_usage->set(val);
+        ddebug_f("_pfc_rdb_block_cache_mem_usage: {} bytes", val);
+    } else {
+        ddebug("_pfc_rdb_block_cache_mem_usage: 0 bytes because block cache is diabled");
+    }
 }
 
 std::pair<std::string, bool>
