@@ -3107,7 +3107,7 @@ void pegasus_server_impl::generate_next_scan_range(const rocksdb::Slice key,
     }
 }
 
-// determin acutal fisrt range, only be called by reverse scan when stop key is empty
+// determine actual first range, only be called by reverse scan when stop key is empty
 void pegasus_server_impl::generate_reverse_first_scan_range(const rocksdb::Slice key,
                                                             const rocksdb::Slice stop,
                                                             ::dsn::blob &range_start_key,
