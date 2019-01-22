@@ -246,13 +246,15 @@ pegasus_server_impl::pegasus_server_impl(dsn::replication::replica *r)
     _wt_opts.disableWAL = true;
 
     // get the checkpoint reserve options.
-    _checkpoint_reserve_min_count = (uint32_t)dsn_config_get_value_uint64(
+    _checkpoint_reserve_min_count_in_config = (uint32_t)dsn_config_get_value_uint64(
         "pegasus.server", "checkpoint_reserve_min_count", 3, "checkpoint_reserve_min_count");
-    _checkpoint_reserve_time_seconds =
+    _checkpoint_reserve_min_count = _checkpoint_reserve_min_count_in_config;
+    _checkpoint_reserve_time_seconds_in_config =
         (uint32_t)dsn_config_get_value_uint64("pegasus.server",
                                               "checkpoint_reserve_time_seconds",
                                               0,
                                               "checkpoint_reserve_time_seconds, 0 means no check");
+    _checkpoint_reserve_time_seconds = _checkpoint_reserve_time_seconds_in_config;
 
     _update_rdb_stat_interval = std::chrono::seconds(dsn_config_get_value_uint64(
         "pegasus.server", "update_rdb_stat_interval", 600, "update_rdb_stat_interval, in seconds"));
@@ -386,12 +388,14 @@ void pegasus_server_impl::parse_checkpoints()
 
 pegasus_server_impl::~pegasus_server_impl() = default;
 
-void pegasus_server_impl::gc_checkpoints()
+void pegasus_server_impl::gc_checkpoints(bool force_reserve_one)
 {
+    int min_count = force_reserve_one ? 1 : _checkpoint_reserve_min_count;
+    uint64_t reserve_time = force_reserve_one ? 0 : _checkpoint_reserve_time_seconds;
     std::deque<int64_t> temp_list;
     {
         ::dsn::utils::auto_lock<::dsn::utils::ex_lock_nr> l(_checkpoints_lock);
-        if (_checkpoints.size() <= _checkpoint_reserve_min_count)
+        if (_checkpoints.size() <= min_count)
             return;
         temp_list = _checkpoints;
     }
@@ -400,10 +404,10 @@ void pegasus_server_impl::gc_checkpoints()
     int64_t max_del_d = -1;
     uint64_t current_time = dsn_now_ms() / 1000;
     for (int i = 0; i < temp_list.size(); ++i) {
-        if (i + _checkpoint_reserve_min_count >= temp_list.size())
+        if (i + min_count >= temp_list.size())
             break;
         int64_t d = temp_list[i];
-        if (_checkpoint_reserve_time_seconds > 0) {
+        if (reserve_time > 0) {
             // we check last write time of "CURRENT" instead of directory, because the directory's
             // last write time may be updated by previous incompleted garbage collection.
             auto cpt_dir =
@@ -419,7 +423,7 @@ void pegasus_server_impl::gc_checkpoints()
                 break;
             }
             uint64_t last_write_time = (uint64_t)tm;
-            if (last_write_time + _checkpoint_reserve_time_seconds >= current_time) {
+            if (last_write_time + reserve_time >= current_time) {
                 // not expired
                 break;
             }
@@ -442,7 +446,7 @@ void pegasus_server_impl::gc_checkpoints()
         int delete_max_index = -1;
         for (int i = 0; i < _checkpoints.size(); ++i) {
             int64_t del_d = _checkpoints[i];
-            if (i + _checkpoint_reserve_min_count >= _checkpoints.size() || del_d > max_del_d)
+            if (i + min_count >= _checkpoints.size() || del_d > max_del_d)
                 break;
             to_delete_list.push_back(del_d);
             delete_max_index = i;
@@ -2654,6 +2658,7 @@ void pegasus_server_impl::update_app_envs(const std::map<std::string, std::strin
 {
     update_usage_scenario(envs);
     update_default_ttl(envs);
+    update_checkpoint_reserve(envs);
     _manual_compact_svc.start_manual_compact_if_needed(envs);
 }
 
@@ -2672,17 +2677,15 @@ void pegasus_server_impl::update_usage_scenario(const std::map<std::string, std:
     if (new_usage_scenario != _usage_scenario) {
         std::string old_usage_scenario = _usage_scenario;
         if (set_usage_scenario(new_usage_scenario)) {
-            ddebug("%s: update app env[%s] from %s to %s succeed",
-                   replica_name(),
-                   ROCKSDB_ENV_USAGE_SCENARIO_KEY.c_str(),
-                   old_usage_scenario.c_str(),
-                   new_usage_scenario.c_str());
+            ddebug_replica("update app env[{}] from {} to {} succeed",
+                           ROCKSDB_ENV_USAGE_SCENARIO_KEY,
+                           old_usage_scenario,
+                           new_usage_scenario);
         } else {
-            derror("%s: update app env[%s] from %s to %s failed",
-                   replica_name(),
-                   ROCKSDB_ENV_USAGE_SCENARIO_KEY.c_str(),
-                   old_usage_scenario.c_str(),
-                   new_usage_scenario.c_str());
+            derror_replica("update app env[{}] from {} to {} failed",
+                           ROCKSDB_ENV_USAGE_SCENARIO_KEY,
+                           old_usage_scenario,
+                           new_usage_scenario);
         }
     }
 }
@@ -2698,6 +2701,42 @@ void pegasus_server_impl::update_default_ttl(const std::map<std::string, std::st
         }
         _server_write->set_default_ttl(static_cast<uint32_t>(ttl));
         _key_ttl_compaction_filter_factory->SetDefaultTTL(static_cast<uint32_t>(ttl));
+    }
+}
+
+void pegasus_server_impl::update_checkpoint_reserve(const std::map<std::string, std::string> &envs)
+{
+    int32_t count = _checkpoint_reserve_min_count_in_config;
+    int32_t time = _checkpoint_reserve_time_seconds_in_config;
+
+    auto find = envs.find(ROCKDB_CHECKPOINT_RESERVE_MIN_COUNT);
+    if (find != envs.end()) {
+        if (!dsn::buf2int32(find->second, count) || count <= 0) {
+            derror_replica("{}={} is invalid.", find->first, find->second);
+            return;
+        }
+    }
+    find = envs.find(ROCKDB_CHECKPOINT_RESERVE_TIME_SECONDS);
+    if (find != envs.end()) {
+        if (!dsn::buf2int32(find->second, time) || time < 0) {
+            derror_replica("{}={} is invalid.", find->first, find->second);
+            return;
+        }
+    }
+
+    if (count != _checkpoint_reserve_min_count) {
+        ddebug_replica("update app env[{}] from {} to {} succeed",
+                       ROCKDB_CHECKPOINT_RESERVE_MIN_COUNT,
+                       _checkpoint_reserve_min_count,
+                       count);
+        _checkpoint_reserve_min_count = count;
+    }
+    if (time != _checkpoint_reserve_time_seconds) {
+        ddebug_replica("update app env[{}] from {} to {} succeed",
+                       ROCKDB_CHECKPOINT_RESERVE_TIME_SECONDS,
+                       _checkpoint_reserve_time_seconds,
+                       time);
+        _checkpoint_reserve_time_seconds = time;
     }
 }
 
@@ -2919,6 +2958,32 @@ uint64_t pegasus_server_impl::do_manual_compact(const rocksdb::CompactRangeOptio
     ddebug_replica("CompactRange finished, status = {}, time_used = {}ms",
                    status.ToString().c_str(),
                    dsn_now_ms() - start_time);
+
+    // generate new checkpoint and remove old checkpoints, in order to release storage asap
+    ddebug_replica("generate new checkpoint immediately after manual compact");
+    int64_t old_last_durable = last_durable_decree();
+    sync_checkpoint();
+    gc_checkpoints(true);
+    if (last_durable_decree() == old_last_durable) {
+        // it is possible that the new checkpoint is not generated, if there was no data
+        // written into rocksdb when doing manual compact.
+        ddebug_replica("no new checkpoint generated, will retry after 5 minutes");
+        ::dsn::tasking::enqueue(LPC_PEGASUS_SERVER_DELAY,
+                                &_tracker,
+                                [this, old_last_durable]() {
+                                    ddebug_replica("retry gc checkpoints after manual compact");
+                                    if (last_durable_decree() == old_last_durable) {
+                                        // if the new checkpoint is still not generated in the
+                                        // last 5 minutes, we will try to generate it again, and
+                                        // it will probably succeed because at least some empty
+                                        // data is written into rocksdb by periodic group check.
+                                        sync_checkpoint();
+                                    }
+                                    gc_checkpoints(true);
+                                },
+                                0,
+                                std::chrono::minutes(5));
+    }
 
     // update rocksdb statistics immediately
     update_replica_rocksdb_statistics();
