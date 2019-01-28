@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <pegasus/client.h>
+#include "client_test.h"
 using namespace pegasus;
 
 int main(int argc, const char *argv[])
@@ -77,6 +78,99 @@ int main(int argc, const char *argv[])
     } else {
         fprintf(stdout, "INFO: del succeed\n");
     }
+
+    // client test
+    fprintf(stdout, "======= client test begin =======\n");
+
+    // test config
+    int data_step = 2;
+    int scan_step = 3;
+    int data_key_len = 3;
+    int scan_key_len = 3;
+    int test_data_set = 2;  // 0:!-~ 1:A-z 2:0-9
+    bool print_data = false; // better be turn off if data_step is small
+    int scanner_count = 0;  // split count
+    scan_options.batch_size = 3;
+    scan_options.start_inclusive = false;
+    scan_options.stop_inclusive = false;
+    scan_options.reverse = true;
+
+    fprintf(stdout,
+            "\n+++++++ Test Configuration +++++++\n"
+            "data_step = %d\n"
+            "scan_step = %d\n"
+            "data_key_len = %d\n"
+            "scan_key_len = %d\n"
+            "test_data_set = %d\n"
+            "scan batch_size = %d\n"
+            "scanner_count = %d\n"
+            "%s scan\n"
+            "print %sdata\n",
+            data_step,
+            scan_step,
+            data_key_len,
+            scan_key_len,
+            test_data_set,
+            scan_options.batch_size,
+            scanner_count,
+            scan_options.reverse ? "DESC" : "ASC",
+            print_data ? "" : "no ");
+
+    fprintf(stdout, "\n+++++++ Data Generation +++++++\n");
+    ret = generate_data(client, data_step, data_key_len, scan_key_len, test_data_set);
+    if (ret != PERR_OK) {
+        fprintf(stdout, "ERROR: generate data failed\n");
+        return -1;
+    } else {
+        fprintf(stdout, "INFO: generate data succeed\n");
+    }
+
+    fprintf(stdout, "\n+++++++ Scanner Test +++++++\n");
+    ret = scanner_test(client, scan_options, scan_step, print_data);
+    if (ret != PERR_OK) {
+        fprintf(stdout, "ERROR: scanner test failed\n");
+        return -1;
+    } else {
+        fprintf(stdout, "INFO: scanner test succeed\n");
+    }
+
+    fprintf(stdout, "\n+++++++ Unordered Full Scanners Test +++++++\n");
+    ret = unordered_full_scanners_test(client, scan_options, scanner_count, print_data);
+    if (ret != PERR_OK) {
+        fprintf(stdout, "ERROR: unordered full scanners test failed\n");
+        return -1;
+    } else {
+        fprintf(stdout, "INFO: unordered full scanners test succeed\n");
+    }
+
+    fprintf(stdout, "\n+++++++ Unordered Range Scanners Test +++++++\n");
+    ret = unordered_range_scanners_test(client, scan_options, scan_step, scanner_count, print_data);
+    if (ret != PERR_OK) {
+        fprintf(stdout, "ERROR: unordered full scanners test failed\n");
+        return -1;
+    } else {
+        fprintf(stdout, "INFO: unordered full scanners test succeed\n");
+    }
+
+    fprintf(stdout, "\n+++++++ Sorted Scanner Test +++++++\n");
+    ret = sorted_scanner_test(client, scan_options, scan_step, print_data);
+    if (ret != PERR_OK) {
+        fprintf(stdout, "ERROR: unordered full scanners test failed\n");
+        return -1;
+    } else {
+        fprintf(stdout, "INFO: unordered full scanners test succeed\n");
+    }
+
+    fprintf(stdout, "\n+++++++ Data Cleanup +++++++\n");
+    ret = cleanup_data(client, data_step);
+    if (ret != PERR_OK) {
+        fprintf(stdout, "ERROR: cleanup data failed\n");
+        return -1;
+    } else {
+        fprintf(stdout, "INFO: cleanup data succeed\n");
+    }
+
+    fprintf(stdout, "\n======= client test end =======\n");
 
     return 0;
 }
