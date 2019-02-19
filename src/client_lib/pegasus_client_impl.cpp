@@ -1488,8 +1488,6 @@ int pegasus_client_impl::key_successor(char *key, const unsigned int &len)
     _server_error_to_client[::dsn::ERR_APP_EXIST] = PERR_APP_EXIST;
     _server_error_to_client[::dsn::ERR_BUSY] = PERR_APP_BUSY;
 
-    _server_error_to_client[::dsn::ERR_CONNECTION_THRESHOLD] = PERR_SERVER_CONNECTION_THRESHOLD;
-
     // rocksdb error;
     for (int i = 1001; i < 1013; i++) {
         _server_error_to_client[-i] = -i;
